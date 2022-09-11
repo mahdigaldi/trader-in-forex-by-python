@@ -1,0 +1,96 @@
+import numpy as np
+import pyswarm as ps
+import pandas_datareader as pdt
+import matplotlib.pyplot as plt
+import MetaTrader5 as mt5
+
+np.random.seed(0)
+plt.style.use('ggplot')
+
+local=mt5.initialize("C:\Program Files\RoboForex - MetaTrader 5")
+
+class full:
+    def __init__(self):
+        self.TrainLog = []
+    def GetData(self, Ticker:str, Start:str, End:str):
+        self.Ticker = Ticker
+        self.Start = Start
+        self.End = End
+        self.DF = pdt.DataReader(Ticker,data_source="yahoo",start=Start,end=End)
+        self.DF.drop(labels=['High', 'Low', 'Volume', 'Adj Close'],axis=1,inplace=True)
+    def ProcessData(self, L:int):
+        self.L = L
+        self.DF[f'SMA({L})'] = self.DF['Close'].rolling(L).mean()
+        self.DF[f'Log-Ratio({L})'] = np.log(self.DF['Close'] / self.DF[f'SMA({L})'])
+        self.DF['FP'] = self.DF['Open'].shift(-1)
+        self.DF.dropna(inplace=True)
+        self.nD = len(self.DF)
+    def Trade(self, Parameters:np.ndarray):
+        Moneys = np.zeros(self.nD)
+        Shares = np.zeros(self.nD)
+        Values = np.zeros(self.nD)
+        Signals = np.zeros(self.nD)
+        Buys = {'Time':[], 'Price':[]}
+        Sells = {'Time':[], 'Price':[]}
+        money = 1
+        share = 0
+        for i in range(self.nD):
+            fp = self.DF['FP'][i]
+            lr = self.DF[f'Log-Ratio({self.L})'][i]
+            signal = Parameters[0] + Parameters[1] * lr
+            if signal > 0 and share == 0:
+                share = money / fp
+                money = 0
+                Buys['Time'].append(i)
+                Buys['Price'].append(fp)
+            elif signal < 0 and share > 0:
+                money = share * fp
+                share = 0
+                Sells['Time'].append(i)
+                Sells['Price'].append(fp)
+            Moneys[i] = money
+            Shares[i] = share
+            Values[i] = money + share * fp
+            Signals[i] = signal
+        Return = 100 * ((Values[-1] / Values[0])**(1 / (self.nD - 1)) - 1)
+        return Moneys, Shares, Values, Signals, Buys, Sells, Return
+    def Loss(self, P:np.ndarray):
+        Return = self.Trade(P)[-1]
+        self.TrainLog.append(Return)
+        return -Return
+    def Train(self, MaxIteration:int, SwarmSize:int):
+        lb = -1 * np.ones(2)
+        ub = +1 * np.ones(2)
+        self.P, BestLoss = ps.pso(self.Loss,
+                                  lb,
+                                  ub,
+                                  swarmsize=SwarmSize,
+                                  maxiter=MaxIteration)
+        BestReturn = -BestLoss
+        print('_'*50)
+        print('Optimization Result:')
+        print(f'\tBest Parameters: {self.P}')
+        print(f'\tBest Return: {BestReturn} %')
+        print('_'*50)
+    
+    
+    
+
+    
+    
+Trader=full()
+Trader.GetData('BTC-USD', '2019-01-01', '2022-01-01')
+
+Trader.ProcessData(60)
+
+Trader.Train(50, 60)
+
+
+plt.plot(Trader.TrainLog, ls='-', lw=0.8, c='crimson')
+plt.title('Model Return Over Function Evaluations')
+plt.xlabel('Function Evaluation')
+plt.ylabel('Average Daily Return (%)')
+plt.show()
+
+
+
